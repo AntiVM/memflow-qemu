@@ -31,11 +31,18 @@ impl<P: MemoryView + Process> QemuProcfs<P> {
     pub fn new<O: Os<IntoProcessType = P>>(
         mut os: O,
         map_override: Option<CTup2<Address, umem>>,
+        process_name: Option<String>,
     ) -> Result<Self> {
         let mut proc = None;
 
         let callback = &mut |info: ProcessInfo| {
-            if proc.is_none() && is_qemu(&info) {
+            
+            let matches = process_name
+                .as_ref()
+                .map(|nm| &*info.name == nm)
+                .unwrap_or_else(|| is_qemu(&info));
+
+            if proc.is_none() && matches {
                 proc = Some(info);
             }
 
@@ -58,12 +65,17 @@ impl<P: MemoryView + Process> QemuProcfs<P> {
         mut os: O,
         name: &str,
         map_override: Option<CTup2<Address, umem>>,
+        process_name: Option<String>,
     ) -> Result<Self> {
         let mut proc = None;
 
         let callback = &mut |info: ProcessInfo| {
+            let matches = process_name
+                .as_ref()
+                .map(|nm| &*info.name == nm)
+                .unwrap_or_else(|| is_qemu(&info));
             if proc.is_none()
-                && is_qemu(&info)
+                && matches
                 && qemu_arg_opt(info.command_line.split_whitespace(), "-name", "guest").as_deref()
                     == Some(name)
             {
@@ -202,6 +214,7 @@ fn validator() -> ArgsValidator {
     ArgsValidator::new()
         .arg(ArgDescriptor::new("map_base").description("override of VM memory base"))
         .arg(ArgDescriptor::new("map_size").description("override of VM memory size"))
+        .arg(ArgDescriptor::new("qemu_process_name").description("override default QEMU binary name"))
 }
 
 /// Creates a new Qemu Procfs instance.
@@ -262,15 +275,20 @@ pub fn create_connector_with_os<O: Os>(
                         .and_then(|size| umem::from_str_radix(size, 16).ok()),
                 )
                 .map(|(start, size)| CTup2(Address::from(start), size));
+            
+            let process_name_override = args
+                    .get("qemu_process_name")
+                    .map(|s| s.to_string());
+
 
             if let Some(name) = name.or_else(|| args.get("name")) {
                 if let Ok(pid) = Pid::from_str_radix(name, 10) {
                     QemuProcfs::with_pid(os, pid, map_override)
                 } else {
-                    QemuProcfs::with_guest_name(os, name, map_override)
+                    QemuProcfs::with_guest_name(os, name, map_override, process_name_override)
                 }
             } else {
-                QemuProcfs::new(os, map_override)
+                QemuProcfs::new(os, map_override, process_name_override)
             }
         }
         Err(err) => {
